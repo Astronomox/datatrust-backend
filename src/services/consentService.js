@@ -1,217 +1,114 @@
-const { Consent, User, Organization } = require('../models');
-const { CONSENT_STATUS } = require('../config/constants');
-const { addDays } = require('../utils/helpers');
-const { logger } = require('../middleware/logger');
-const notificationService = require('./notificationService');
+const { db } = require('../config/firebase');
 
 class ConsentService {
-  // Create new consent
-  async grantConsent(consentData) {
+  /**
+   * Grant consent to organization
+   */
+  static async grantConsent(consentData) {
     try {
-      const {
-        userId,
-        organizationId,
-        dataTypes,
-        purpose,
-        purposeDescription,
-        durationDays
-      } = consentData;
-
-      // Verify user and organization exist
-      const user = await User.findByPk(userId);
-      const organization = await Organization.findByPk(organizationId);
-
-      if (!user || !organization) {
-        throw new Error('User or organization not found');
-      }
-
-      // Calculate expiry date
-      const expiresAt = durationDays ? addDays(new Date(), durationDays) : null;
-
-      const consent = await Consent.create({
-        userId,
-        organizationId,
-        dataTypes,
-        purpose,
-        purposeDescription,
-        status: CONSENT_STATUS.ACTIVE,
+      const consentId = db.collection('consents').doc().id;
+      
+      const consent = {
+        id: consentId,
+        ...consentData,
+        status: 'active',
         grantedAt: new Date(),
-        expiresAt,
-        consentVersion: '1.0'
-      });
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
 
-      // Notify organization
-      await notificationService.notifyConsentGranted(consent, user, organization);
-
-      logger.info('Consent granted', { consentId: consent.id });
-
+      await db.collection('consents').doc(consentId).set(consent);
+      
       return consent;
     } catch (error) {
-      logger.error('Error granting consent:', error);
+      console.error('Error granting consent:', error);
       throw error;
     }
   }
 
-  // Revoke consent
-  async revokeConsent(consentId, userId, reason = null) {
+  /**
+   * Revoke consent
+   */
+  static async revokeConsent(consentId, reason) {
     try {
-      const consent = await Consent.findByPk(consentId);
-
-      if (!consent) {
-        throw new Error('Consent not found');
-      }
-
-      if (consent.userId !== userId) {
-        throw new Error('Not authorized to revoke this consent');
-      }
-
-      if (consent.status === CONSENT_STATUS.REVOKED) {
-        throw new Error('Consent already revoked');
-      }
-
-      consent.status = CONSENT_STATUS.REVOKED;
-      consent.revokedAt = new Date();
-      consent.revokeReason = reason;
-      await consent.save();
-
-      // Notify organization
-      const user = await User.findByPk(userId);
-      const organization = await Organization.findByPk(consent.organizationId);
-      await notificationService.notifyConsentRevoked(consent, user, organization);
-
-      logger.info('Consent revoked', { consentId: consent.id });
-
-      return consent;
-    } catch (error) {
-      logger.error('Error revoking consent:', error);
-      throw error;
-    }
-  }
-
-  // Get user's consents
-  async getUserConsents(userId, options = {}) {
-    try {
-      const { status, page = 1, limit = 20 } = options;
-      
-      const whereClause = { userId };
-      
-      if (status) {
-        whereClause.status = status;
-      }
-
-      const { count, rows } = await Consent.findAndCountAll({
-        where: whereClause,
-        include: [
-          {
-            association: 'organization',
-            attributes: ['id', 'name', 'sector', 'email']
-          }
-        ],
-        order: [['grantedAt', 'DESC']],
-        limit: parseInt(limit),
-        offset: (parseInt(page) - 1) * parseInt(limit)
+      await db.collection('consents').doc(consentId).update({
+        status: 'revoked',
+        revokedAt: new Date(),
+        revokeReason: reason,
+        updatedAt: new Date()
       });
+
+      return { success: true };
+    } catch (error) {
+      console.error('Error revoking consent:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get user's consents
+   */
+  static async getUserConsents(userId, options = {}) {
+    try {
+      let query = db.collection('consents').where('userId', '==', userId);
+
+      if (options.status) {
+        query = query.where('status', '==', options.status);
+      }
+
+      const snapshot = await query.orderBy('createdAt', 'desc').get();
+      
+      return snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+    } catch (error) {
+      console.error('Error getting user consents:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get consent by ID
+   */
+  static async getConsentById(consentId) {
+    try {
+      const doc = await db.collection('consents').doc(consentId).get();
+      
+      if (!doc.exists) {
+        return null;
+      }
 
       return {
-        consents: rows,
-        total: count,
-        page: parseInt(page),
-        totalPages: Math.ceil(count / limit)
+        id: doc.id,
+        ...doc.data()
       };
     } catch (error) {
-      logger.error('Error getting user consents:', error);
+      console.error('Error getting consent:', error);
       throw error;
     }
   }
 
-  // Get organization's consents
-  async getOrganizationConsents(organizationId, options = {}) {
+  /**
+   * Check if consent exists and is active
+   */
+  static async hasActiveConsent(userId, organizationId, dataType) {
     try {
-      const { status, page = 1, limit = 20 } = options;
-      
-      const whereClause = { organizationId };
-      
-      if (status) {
-        whereClause.status = status;
-      }
+      const snapshot = await db.collection('consents')
+        .where('userId', '==', userId)
+        .where('organizationId', '==', organizationId)
+        .where('dataTypes', 'array-contains', dataType)
+        .where('status', '==', 'active')
+        .where('expiresAt', '>', new Date())
+        .limit(1)
+        .get();
 
-      const { count, rows } = await Consent.findAndCountAll({
-        where: whereClause,
-        include: [
-          {
-            association: 'user',
-            attributes: ['id', 'firstName', 'lastName', 'email']
-          }
-        ],
-        order: [['grantedAt', 'DESC']],
-        limit: parseInt(limit),
-        offset: (parseInt(page) - 1) * parseInt(limit)
-      });
-
-      return {
-        consents: rows,
-        total: count,
-        page: parseInt(page),
-        totalPages: Math.ceil(count / limit)
-      };
+      return !snapshot.empty;
     } catch (error) {
-      logger.error('Error getting organization consents:', error);
-      throw error;
-    }
-  }
-
-  // Check if valid consent exists
-  async checkConsent(userId, organizationId, dataType) {
-    try {
-      const consent = await Consent.findOne({
-        where: {
-          userId,
-          organizationId,
-          status: CONSENT_STATUS.ACTIVE
-        }
-      });
-
-      if (!consent) {
-        return { valid: false, reason: 'No consent found' };
-      }
-
-      if (!consent.isValid()) {
-        return { valid: false, reason: 'Consent expired or revoked' };
-      }
-
-      if (!consent.dataTypes.includes(dataType)) {
-        return { valid: false, reason: 'Data type not included in consent' };
-      }
-
-      return { valid: true, consent };
-    } catch (error) {
-      logger.error('Error checking consent:', error);
-      throw error;
-    }
-  }
-
-  // Expire old consents (cron job function)
-  async expireOldConsents() {
-    try {
-      const expiredConsents = await Consent.update(
-        { status: CONSENT_STATUS.EXPIRED },
-        {
-          where: {
-            status: CONSENT_STATUS.ACTIVE,
-            expiresAt: {
-              $lt: new Date()
-            }
-          }
-        }
-      );
-
-      logger.info(`Expired ${expiredConsents[0]} consents`);
-      return expiredConsents[0];
-    } catch (error) {
-      logger.error('Error expiring consents:', error);
+      console.error('Error checking consent:', error);
       throw error;
     }
   }
 }
 
-module.exports = new ConsentService();
+module.exports = ConsentService;

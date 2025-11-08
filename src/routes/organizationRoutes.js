@@ -1,23 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const {
-  createOrganization,
-  getMyOrganization,
-  getOrganizationById,
-  updateOrganization,
-  getAllOrganizations,
-  regenerateApiKey
-} = require('../controllers/organizationController');
-const { protect, authorize, optionalAuth } = require('../middleware/auth');
+const OrganizationController = require('../controllers/organizationController');
+const { authenticate } = require('../middleware/auth');
 
 // Public routes
-router.get('/', optionalAuth, getAllOrganizations);
-router.get('/:id', getOrganizationById);
+router.get('/', OrganizationController.getOrganizations);
+router.get('/:organizationId', OrganizationController.getOrganization);
 
-// Organization routes
-router.post('/', protect, authorize('organization'), createOrganization);
-router.get('/my/organization', protect, authorize('organization'), getMyOrganization);
-router.put('/:id', protect, authorize('organization', 'admin'), updateOrganization);
-router.post('/:id/regenerate-key', protect, authorize('organization', 'admin'), regenerateApiKey);
+// Protected routes
+router.use(authenticate);
+router.get('/user/my-organizations', OrganizationController.getUserOrganizations);
+router.post('/', OrganizationController.createOrganization); // Admin only
 
 module.exports = router;

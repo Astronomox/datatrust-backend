@@ -1,165 +1,101 @@
-const { AccessLog, Consent } = require('../models');
-const { logger } = require('../middleware/logger');
+const { db } = require('../config/firebase');
 
 class AuditService {
-  // Log data access
-  async logAccess(accessData) {
+  /**
+   * Log an audit event
+   */
+  static async logAuditEvent(eventData) {
     try {
-      const {
-        userId,
-        organizationId,
-        accessedBy,
-        dataType,
-        action,
-        purpose,
-        ipAddress,
-        userAgent,
-        consentId
-      } = accessData;
-
-      // Check if consent exists and is valid
-      let wasAuthorized = false;
-      if (consentId) {
-        const consent = await Consent.findByPk(consentId);
-        if (consent && consent.isValid()) {
-          wasAuthorized = true;
-        }
-      }
-
-      const log = await AccessLog.create({
-        userId,
-        organizationId,
-        consentId,
-        accessedBy,
-        accessedAt: new Date(),
-        dataType,
-        action,
-        purpose,
-        ipAddress,
-        userAgent,
-        wasAuthorized
-      });
-
-      logger.info('Access logged', { logId: log.id, wasAuthorized });
-
-      return log;
-    } catch (error) {
-      logger.error('Error logging access:', error);
-      throw error;
-    }
-  }
-
-  // Get access logs for a user
-  async getUserAccessLogs(userId, options = {}) {
-    try {
-      const { page = 1, limit = 20, startDate, endDate } = options;
-      
-      const whereClause = { userId };
-      
-      if (startDate || endDate) {
-        whereClause.accessedAt = {};
-        if (startDate) whereClause.accessedAt.$gte = new Date(startDate);
-        if (endDate) whereClause.accessedAt.$lte = new Date(endDate);
-      }
-
-      const { count, rows } = await AccessLog.findAndCountAll({
-        where: whereClause,
-        include: [
-          {
-            association: 'organization',
-            attributes: ['id', 'name', 'sector']
-          },
-          {
-            association: 'consent',
-            attributes: ['id', 'purpose', 'status']
-          }
-        ],
-        order: [['accessedAt', 'DESC']],
-        limit: parseInt(limit),
-        offset: (parseInt(page) - 1) * parseInt(limit)
-      });
-
-      return {
-        logs: rows,
-        total: count,
-        page: parseInt(page),
-        totalPages: Math.ceil(count / limit)
+      const auditData = {
+        ...eventData,
+        timestamp: new Date().toISOString(),
+        createdAt: new Date()
       };
+
+      // Store in Firestore
+      const auditRef = await db.collection('audit_logs').add(auditData);
+      
+      console.log('Audit event logged:', auditRef.id);
+      return auditRef.id;
     } catch (error) {
-      logger.error('Error getting user access logs:', error);
+      console.error('Error logging audit event:', error);
       throw error;
     }
   }
 
-  // Get access logs for an organization
-  async getOrganizationAccessLogs(organizationId, options = {}) {
-    try {
-      const { page = 1, limit = 20, startDate, endDate } = options;
-      
-      const whereClause = { organizationId };
-      
-      if (startDate || endDate) {
-        whereClause.accessedAt = {};
-        if (startDate) whereClause.accessedAt.$gte = new Date(startDate);
-        if (endDate) whereClause.accessedAt.$lte = new Date(endDate);
-      }
+  /**
+   * Log data access
+   */
+  static async logDataAccess(accessData) {
+    const eventData = {
+      type: 'DATA_ACCESS',
+      userId: accessData.userId,
+      organizationId: accessData.organizationId,
+      dataType: accessData.dataType,
+      action: accessData.action,
+      wasAuthorized: accessData.wasAuthorized || false,
+      ipAddress: accessData.ipAddress,
+      userAgent: accessData.userAgent,
+      metadata: accessData.metadata || {}
+    };
 
-      const { count, rows } = await AccessLog.findAndCountAll({
-        where: whereClause,
-        include: [
-          {
-            association: 'user',
-            attributes: ['id', 'firstName', 'lastName', 'email']
-          }
-        ],
-        order: [['accessedAt', 'DESC']],
-        limit: parseInt(limit),
-        offset: (parseInt(page) - 1) * parseInt(limit)
-      });
-
-      return {
-        logs: rows,
-        total: count,
-        page: parseInt(page),
-        totalPages: Math.ceil(count / limit)
-      };
-    } catch (error) {
-      logger.error('Error getting organization access logs:', error);
-      throw error;
-    }
+    return this.logAuditEvent(eventData);
   }
 
-  // Get unauthorized access attempts
-  async getUnauthorizedAccess(organizationId = null) {
+  /**
+   * Log consent changes
+   */
+  static async logConsentChange(consentData) {
+    const eventData = {
+      type: 'CONSENT_CHANGE',
+      userId: consentData.userId,
+      organizationId: consentData.organizationId,
+      action: consentData.action, // 'GRANTED', 'REVOKED', 'MODIFIED'
+      dataTypes: consentData.dataTypes,
+      duration: consentData.duration,
+      metadata: consentData.metadata || {}
+    };
+
+    return this.logAuditEvent(eventData);
+  }
+
+  /**
+   * Log security events
+   */
+  static async logSecurityEvent(securityData) {
+    const eventData = {
+      type: 'SECURITY_EVENT',
+      userId: securityData.userId,
+      event: securityData.event, // 'LOGIN', 'LOGOUT', 'PASSWORD_CHANGE', etc.
+      severity: securityData.severity || 'MEDIUM',
+      ipAddress: securityData.ipAddress,
+      userAgent: securityData.userAgent,
+      metadata: securityData.metadata || {}
+    };
+
+    return this.logAuditEvent(eventData);
+  }
+
+  /**
+   * Get audit logs for a user
+   */
+  static async getUserAuditLogs(userId, limit = 50) {
     try {
-      const whereClause = { wasAuthorized: false };
-      
-      if (organizationId) {
-        whereClause.organizationId = organizationId;
-      }
+      const snapshot = await db.collection('audit_logs')
+        .where('userId', '==', userId)
+        .orderBy('timestamp', 'desc')
+        .limit(limit)
+        .get();
 
-      const logs = await AccessLog.findAll({
-        where: whereClause,
-        include: [
-          {
-            association: 'organization',
-            attributes: ['id', 'name']
-          },
-          {
-            association: 'user',
-            attributes: ['id', 'firstName', 'lastName', 'email']
-          }
-        ],
-        order: [['accessedAt', 'DESC']],
-        limit: 100
-      });
-
-      return logs;
+      return snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
     } catch (error) {
-      logger.error('Error getting unauthorized access:', error);
+      console.error('Error getting user audit logs:', error);
       throw error;
     }
   }
 }
 
-module.exports = new AuditService();
+module.exports = AuditService;

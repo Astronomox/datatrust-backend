@@ -1,21 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const {
-  logAccess,
-  getMyAccessLogs,
-  getOrganizationLogs,
-  getUnauthorizedAccess
-} = require('../controllers/accessLogController');
-const { protect, authorize } = require('../middleware/auth');
+const AccessLogController = require('../controllers/accessLogController');
+const { authenticate } = require('../middleware/auth');
 
-// Organization routes
-router.post('/', protect, authorize('organization', 'admin'), logAccess);
-router.get('/organization/:orgId', protect, authorize('organization', 'admin'), getOrganizationLogs);
+// All routes require authentication
+router.use(authenticate);
 
-// Citizen routes
-router.get('/my-data', protect, authorize('citizen'), getMyAccessLogs);
-
-// Admin routes
-router.get('/unauthorized', protect, authorize('admin'), getUnauthorizedAccess);
+router.post('/log', AccessLogController.logAccess);
+router.get('/my-data', AccessLogController.getUserAccessLogs);
+router.get('/organization/:organizationId', AccessLogController.getOrganizationAccessLogs);
 
 module.exports = router;

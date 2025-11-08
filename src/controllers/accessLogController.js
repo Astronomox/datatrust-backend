@@ -1,128 +1,158 @@
-const auditService = require('../services/auditService');
-const { successResponse, errorResponse, paginatedResponse } = require('../utils/responseHandler');
+const { db } = require('../config/firebase');
+const AuditService = require('../services/auditService');
 
-// @desc    Log data access
-// @route   POST /api/v1/access-logs
-// @access  Private (Organization)
-exports.logAccess = async (req, res, next) => {
-  try {
-    const { userId, dataType, action, purpose, consentId } = req.body;
-    const { Organization } = require('../models');
+class AccessLogController {
+  /**
+   * Log data access
+   */
+  static async logAccess(req, res) {
+    try {
+      const {
+        organizationId,
+        dataType,
+        action,
+        purpose,
+        wasAuthorized = false,
+        metadata = {}
+      } = req.body;
 
-    // Get organization
-    const organization = await Organization.findOne({
-      where: { userId: req.user.id }
-    });
+      const userId = req.user?.uid || req.user?.id;
 
-    if (!organization) {
-      return errorResponse(res, 'Organization not found for this user', 404);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'User authentication required'
+        });
+      }
+
+      // Log the access
+      const logId = await AuditService.logDataAccess({
+        userId,
+        organizationId,
+        dataType,
+        action,
+        wasAuthorized,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        metadata: {
+          purpose,
+          ...metadata
+        }
+      });
+
+      // Also store in access_logs collection for easy querying
+      const accessLogData = {
+        userId,
+        organizationId,
+        dataType,
+        action,
+        purpose,
+        wasAuthorized,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        timestamp: new Date().toISOString(),
+        metadata,
+        logId // Reference to audit log
+      };
+
+      await db.collection('access_logs').add(accessLogData);
+
+      res.status(201).json({
+        success: true,
+        message: 'Access logged successfully',
+        data: { logId }
+      });
+    } catch (error) {
+      console.error('Error logging access:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to log access'
+      });
     }
-
-    const log = await auditService.logAccess({
-      userId,
-      organizationId: organization.id,
-      accessedBy: req.user.email,
-      dataType,
-      action,
-      purpose,
-      ipAddress: req.ip,
-      userAgent: req.get('user-agent'),
-      consentId
-    });
-
-    return successResponse(
-      res,
-      'Access logged successfully',
-      { log },
-      201
-    );
-  } catch (error) {
-    next(error);
   }
-};
 
-// @desc    Get my access logs (citizen view)
-// @route   GET /api/v1/access-logs/my-data
-// @access  Private (Citizen)
-exports.getMyAccessLogs = async (req, res, next) => {
-  try {
-    const { page = 1, limit = 20, startDate, endDate } = req.query;
+  /**
+   * Get user's access logs
+   */
+  static async getUserAccessLogs(req, res) {
+    try {
+      const userId = req.user?.uid || req.user?.id;
+      const { limit = 50, offset = 0 } = req.query;
 
-    const result = await auditService.getUserAccessLogs(req.user.id, {
-      page,
-      limit,
-      startDate,
-      endDate
-    });
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'User authentication required'
+        });
+      }
 
-    return paginatedResponse(
-      res,
-      'Access logs retrieved successfully',
-      result.logs,
-      result.page,
-      limit,
-      result.total
-    );
-  } catch (error) {
-    next(error);
-  }
-};
+      let query = db.collection('access_logs')
+        .where('userId', '==', userId)
+        .orderBy('timestamp', 'desc')
+        .limit(parseInt(limit));
 
-// @desc    Get organization's access logs
-// @route   GET /api/v1/access-logs/organization/:orgId
-// @access  Private (Organization/Admin)
-exports.getOrganizationLogs = async (req, res, next) => {
-  try {
-    const { orgId } = req.params;
-    const { page = 1, limit = 20, startDate, endDate } = req.query;
-    const { Organization } = require('../models');
+      const snapshot = await query.get();
+      
+      const logs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
 
-    // Authorization check
-    const organization = await Organization.findByPk(orgId);
-
-    if (!organization) {
-      return errorResponse(res, 'Organization not found', 404);
+      res.json({
+        success: true,
+        data: logs,
+        pagination: {
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          total: logs.length
+        }
+      });
+    } catch (error) {
+      console.error('Error getting access logs:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to get access logs'
+      });
     }
+  }
 
-    if (req.user.role !== 'admin' && organization.userId !== req.user.id) {
-      return errorResponse(res, 'Not authorized to view these logs', 403);
+  /**
+   * Get organization access logs (for organizations)
+   */
+  static async getOrganizationAccessLogs(req, res) {
+    try {
+      const organizationId = req.params.organizationId;
+      const { limit = 50, offset = 0 } = req.query;
+
+      let query = db.collection('access_logs')
+        .where('organizationId', '==', organizationId)
+        .orderBy('timestamp', 'desc')
+        .limit(parseInt(limit));
+
+      const snapshot = await query.get();
+      
+      const logs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      res.json({
+        success: true,
+        data: logs,
+        pagination: {
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          total: logs.length
+        }
+      });
+    } catch (error) {
+      console.error('Error getting organization access logs:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to get organization access logs'
+      });
     }
-
-    const result = await auditService.getOrganizationAccessLogs(orgId, {
-      page,
-      limit,
-      startDate,
-      endDate
-    });
-
-    return paginatedResponse(
-      res,
-      'Access logs retrieved successfully',
-      result.logs,
-      result.page,
-      limit,
-      result.total
-    );
-  } catch (error) {
-    next(error);
   }
-};
+}
 
-// @desc    Get unauthorized access attempts
-// @route   GET /api/v1/access-logs/unauthorized
-// @access  Private (Admin)
-exports.getUnauthorizedAccess = async (req, res, next) => {
-  try {
-    const { organizationId } = req.query;
-
-    const logs = await auditService.getUnauthorizedAccess(organizationId);
-
-    return successResponse(
-      res,
-      'Unauthorized access logs retrieved successfully',
-      { logs }
-    );
-  } catch (error) {
-    next(error);
-  }
-};
+module.exports = AccessLogController;

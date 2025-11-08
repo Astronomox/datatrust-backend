@@ -1,21 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const {
-  scanOrganization,
-  getComplianceSummary,
-  getViolations,
-  resolveViolation,
-  getComplianceRules
-} = require('../controllers/complianceController');
-const { protect, authorize } = require('../middleware/auth');
+const ComplianceController = require('../controllers/complianceController');
+const { authenticate } = require('../middleware/auth');
 
-// Compliance rules (public)
-router.get('/rules', protect, getComplianceRules);
+// All routes require authentication
+router.use(authenticate);
 
-// Organization compliance
-router.post('/scan/:orgId', protect, authorize('organization', 'admin'), scanOrganization);
-router.get('/summary/:orgId', protect, authorize('organization', 'admin'), getComplianceSummary);
-router.get('/violations/:orgId', protect, authorize('organization', 'admin'), getViolations);
-router.put('/violations/:violationId/resolve', protect, authorize('organization', 'admin'), resolveViolation);
+router.post('/check', ComplianceController.checkCompliance);
+router.get('/user-score', ComplianceController.getUserComplianceScore);
+router.get('/organization/:organizationId', ComplianceController.getOrganizationCompliance);
+router.post('/report-violation', ComplianceController.reportViolation);
 
 module.exports = router;
