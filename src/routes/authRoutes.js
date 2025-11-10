@@ -15,10 +15,8 @@ const { authenticate } = require('../middleware/auth');
  * /auth/register:
  *   post:
  *     summary: Register new user
- *     description: Register a new user after Firebase Authentication
+ *     description: Register a new user (Public endpoint - no authentication required)
  *     tags: [Authentication]
- *     security:
- *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -27,6 +25,7 @@ const { authenticate } = require('../middleware/auth');
  *             type: object
  *             required:
  *               - email
+ *               - password
  *               - firstName
  *               - lastName
  *               - phone
@@ -34,6 +33,9 @@ const { authenticate } = require('../middleware/auth');
  *               email:
  *                 type: string
  *                 example: user@example.com
+ *               password:
+ *                 type: string
+ *                 example: SecurePassword123
  *               firstName:
  *                 type: string
  *                 example: John
@@ -51,21 +53,35 @@ const { authenticate } = require('../middleware/auth');
  *       201:
  *         description: User registered successfully
  *       400:
- *         description: User already registered
+ *         description: User already registered or invalid data
  *       500:
  *         description: Registration failed
  */
-router.post('/register', authenticate, AuthController.register);
+router.post('/register', AuthController.register);
 
 /**
  * @swagger
  * /auth/login:
  *   post:
  *     summary: Login user
- *     description: Login user and update last login time
+ *     description: Login user with email and password (Public endpoint - no authentication required)
  *     tags: [Authentication]
- *     security:
- *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 example: user@example.com
+ *               password:
+ *                 type: string
+ *                 example: SecurePassword123
  *     responses:
  *       200:
  *         description: Login successful
@@ -80,23 +96,27 @@ router.post('/register', authenticate, AuthController.register);
  *                   type: string
  *                 data:
  *                   type: object
+ *       401:
+ *         description: Invalid credentials
  *       404:
  *         description: User not found
  */
-router.post('/login', authenticate, AuthController.login);
+router.post('/login', AuthController.login);
 
 /**
  * @swagger
  * /auth/me:
  *   get:
  *     summary: Get current user profile
- *     description: Retrieve the authenticated user's profile
+ *     description: Retrieve the authenticated user's profile (Protected endpoint)
  *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: User profile retrieved successfully
+ *       401:
+ *         description: Unauthorized - Invalid or missing token
  *       404:
  *         description: User not found
  */
@@ -107,7 +127,7 @@ router.get('/me', authenticate, AuthController.getProfile);
  * /auth/profile:
  *   put:
  *     summary: Update user profile
- *     description: Update authenticated user's profile information
+ *     description: Update authenticated user's profile information (Protected endpoint)
  *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
@@ -120,13 +140,18 @@ router.get('/me', authenticate, AuthController.getProfile);
  *             properties:
  *               firstName:
  *                 type: string
+ *                 example: Jane
  *               lastName:
  *                 type: string
+ *                 example: Smith
  *               phone:
  *                 type: string
+ *                 example: +2348098765432
  *     responses:
  *       200:
  *         description: Profile updated successfully
+ *       401:
+ *         description: Unauthorized - Invalid or missing token
  */
 router.put('/profile', authenticate, AuthController.updateProfile);
 
